@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Base Support</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;max-width:760px;margin:28px auto;padding:0 14px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .card{border:1px solid #eee;border-radius:14px;padding:14px;margin:12px 0}
+    button{padding:10px 16px;border-radius:10px;border:1px solid #ddd;cursor:pointer}
+    input,textarea{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .muted{color:#666;font-size:12px}
+    .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .ok{color:green}.err{color:#b00020}
+    a{color:inherit}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div>
+      <h2 id="title">💙 Base Support</h2>
+      <div class="muted">Support creator di Base — kirim tip + pesan on-chain</div>
+    </div>
+    <button id="connectBtn">Connect</button>
+  </header>
+
+  <div class="card">
+    <div><strong>Creator:</strong> <span id="creatorLabel">(umum)</span></div>
+    <div>Contract: <span id="addr" class="mono"></span></div>
+    <div>Balance: <strong id="balance">0</strong> ETH • Tips: <span id="count">0</span></div>
+    <div class="muted">Explorer: <a id="scan" href="#" target="_blank" rel="noopener">Basescan</a></div>
+  </div>
+
+  <div class="card">
+    <h3>Kirim Dukungan</h3>
+    <div class="row">
+      <input id="name" placeholder="Nama (opsional)"/>
+      <input id="amount" type="number" step="0.0001" placeholder="Jumlah ETH"/>
+    </div>
+    <textarea id="message" rows="3" placeholder="Pesan dukungan…"></textarea>
+    <button id="tipBtn">Kirim Tip</button>
+    <div id="txStatus" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <h3>Pesan Terbaru</h3>
+    <div id="feed"></div>
+  </div>
+
+<script>
+(async function(){
+  const CONTRACT_ADDRESS = "0xf62CF3c0FCcF97f5C17E1291c98BF5851D15a923";
+  const ABI = [
+	{
+		"inputs":[{"internalType":"string","name":"name","type":"string"},{"internalType":"string","name":"message","type":"string"},{"internalType":"string","name":"creator","type":"string"}],
+		"name":"tip","outputs":[],"stateMutability":"payable","type":"function"
+	},
+	{
+		"inputs":[],"stateMutability":"nonpayable","type":"constructor"
+	},
+	{
+		"anonymous":false,
+		"inputs":[
+			{"indexed":true,"internalType":"address","name":"from","type":"address"},
+			{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},
+			{"indexed":false,"internalType":"string","name":"name","type":"string"},
+			{"indexed":false,"internalType":"string","name":"message","type":"string"},
+			{"indexed":false,"internalType":"string","name":"creator","type":"string"},
+			{"indexed":false,"internalType":"uint256","name":"timestamp","type":"uint256"}
+		],
+		"name":"Tipped","type":"event"
+	},
+	{
+		"inputs":[{"internalType":"address payable","name":"to","type":"address"}],
+		"name":"withdraw","outputs":[],"stateMutability":"nonpayable","type":"function"
+	},
+	{
+		"anonymous":false,
+		"inputs":[
+			{"indexed":true,"internalType":"address","name":"to","type":"address"},
+			{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"}
+		],
+		"name":"Withdrawn","type":"event"
+	},
+	{
+		"inputs":[
+			{"internalType":"uint256","name":"start","type":"uint256"},
+			{"internalType":"uint256","name":"end","type":"uint256"}
+		],
+		"name":"getTipsRange",
+		"outputs":[
+			{"internalType":"address[]","name":"froms","type":"address[]"},
+			{"internalType":"uint256[]","name":"amounts","type":"uint256[]"},
+			{"internalType":"string[]","name":"names","type":"string[]"},
+			{"internalType":"string[]","name":"messages","type":"string[]"},
+			{"internalType":"string[]","name":"creators","type":"string[]"},
+			{"internalType":"uint256[]","name":"timestamps","type":"uint256[]"}
+		],
+		"stateMutability":"view","type":"function"
+	},
+	{
+		"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],
+		"stateMutability":"view","type":"function"
+	},
+	{
+		"inputs":[],"name":"tipsCount","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],
+		"stateMutability":"view","type":"function"
+	}
+];
+
+  // Optional: ?user=@usernameX untuk menandai creator
+  const params = new URLSearchParams(location.search);
+  const user = params.get('user');
+  const creatorLabel = document.getElementById('creatorLabel');
+  if (user) {
+    creatorLabel.textContent = user;
+    document.getElementById('title').textContent = `💙 Base Support — ${user}`;
+  }
+
+  const provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+  const contract  = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+
+  const addrEl = document.getElementById('addr');
+  const balEl  = document.getElementById('balance');
+  const countEl= document.getElementById('count');
+  const feedEl = document.getElementById('feed');
+  const connectBtn = document.getElementById('connectBtn');
+  const tipBtn = document.getElementById('tipBtn');
+  const txS = document.getElementById('txStatus');
+  const scanA = document.getElementById('scan');
+
+  addrEl.textContent = CONTRACT_ADDRESS;
+  scanA.href = `https://sepolia.basescan.org/address/${CONTRACT_ADDRESS}`;
+
+  async function ensureBase(){
+    const net = await provider.getNetwork();
+    if (net.chainId !== 84532 && net.chainId !== 8453) {
+      alert('Switch jaringan ke Base (Sepolia/Mainnet) di wallet.');
+    }
+  }
+
+  async function refresh(){
+    const balWei = await provider.getBalance(CONTRACT_ADDRESS);
+    balEl.textContent = ethers.utils.formatEther(balWei);
+    const n = await contract.tipsCount();
+    countEl.textContent = n.toString();
+    await loadFeed(n);
+  }
+
+  // Ambil 15 tip terakhir
+  async function loadFeed(n){
+    feedEl.innerHTML = '';
+    const end = n.toNumber();
+    const start = end > 15 ? end - 15 : 0;
+    if (end === 0) return;
+
+    const res = await contract.getTipsRange(start, end);
+    const [froms, amounts, names, messages, creators, timestamps] = res;
+
+    for (let i = froms.length - 1; i >= 0; i--) { // terbaru dulu
+      if (user && creators[i] !== user) continue;
+      const ts = new Date(Number(timestamps[i]) * 1000).toLocaleString();
+      const div = document.createElement('div');
+      div.style.marginBottom = '12px';
+      div.innerHTML = `<strong>${names[i] || 'Anon'}</strong> mengirim <strong>${ethers.utils.formatEther(amounts[i])} ETH</strong><br/>"${messages[i]}"<br/><span class="muted">for ${creators[i] || '(umum)'} • from ${froms[i]} • ${ts}</span>`;
+      feedEl.appendChild(div);
+    }
+  }
+
+  connectBtn.onclick = async () => {
+    await provider.send('eth_requestAccounts', []);
+    await ensureBase();
+    connectBtn.textContent = 'Connected';
+    await refresh();
+  };
+
+  tipBtn.onclick = async () => {
+    const name    = document.getElementById('name').value;
+    const message = document.getElementById('message').value;
+    const amount  = document.getElementById('amount').value;
+    const targetCreator = user || "";
+
+    if (!amount || Number(amount) <= 0) return alert('Masukkan jumlah ETH');
+    const signer = provider.getSigner();
+    const c = contract.connect(signer);
+
+    txS.className = 'muted';
+    txS.textContent = 'Mengirim…';
+    try{
+      const tx = await c.tip(name, message, targetCreator, {
+        value: ethers.utils.parseEther(amount)
+      });
+      txS.textContent = `Tx: ${tx.hash.slice(0,10)}… menunggu konfirmasi…`;
+      await tx.wait();
+      txS.className = 'muted ok';
+      txS.textContent = 'Sukses!';
+      await refresh();
+    }catch(e){
+      txS.className = 'muted err';
+      txS.textContent = e?.message || 'Error';
+    }
+  };
+
+  contract.on('Tipped', async ()=>{ await refresh(); });
+})();
+</script>
+</body>
+</html>
